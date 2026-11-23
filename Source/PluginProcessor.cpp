@@ -35,13 +35,13 @@ void PsyKickBassScopeProcessor::setParamsFromJson(const juce::String& jsonStr) {
     pPhaseDeg.store((float)v.getProperty("phase", 0.0));
     pDelayMs.store((float)v.getProperty("delayMs", 0.0));
     pInvert.store((float)v.getProperty("inv", 0.0));
-    pSubDuck.store((float)v.getProperty("subDuck", 88.0) * 0.01f);
-    pTopDuck.store((float)v.getProperty("topDuck", 65.0) * 0.01f);
-    pHoldMs.store((float)v.getProperty("hold", 18.0));
-    pRelMs.store((float)v.getProperty("rel", 65.0));
-    pCurve.store((float)v.getProperty("curve", 60.0) * 0.01f);
+    pSubDuck.store((float)v.getProperty("subDuck", 90.0) * 0.01f);
+    pTopDuck.store((float)v.getProperty("topDuck", 85.0) * 0.01f);
+    pHoldMs.store((float)v.getProperty("hold", 20.0));
+    pRelMs.store((float)v.getProperty("rel", 60.0));
+    pCurve.store((float)v.getProperty("curve", 65.0) * 0.01f);
     pXoverHz.store((float)v.getProperty("xover", 120.0));
-    pWarmth.store((float)v.getProperty("warmth", 25.0) * 0.01f);
+    pWarmth.store((float)v.getProperty("warmth", 0.0) * 0.01f);
     pMono.store((float)v.getProperty("mono", 1.0));
     pSubGainDb.store((float)v.getProperty("subGain", 0.0));
     pM30x.store((float)v.getProperty("m30x", 0.0));
@@ -98,81 +98,90 @@ void PsyKickBassScopeProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
     const double dFrac = delaySamps - (double)dInt;
     const double pol = (pInvert.load() > 0.5f) ? -1.0 : 1.0;
 
+    // 2nd-order Linkwitz-Riley (2 cascaded 6dB LPF -> flat sum when duck=0!)
     const double fc = juce::jlimit(50.0, 300.0, (double)pXoverHz.load());
     const double g = 1.0 - std::exp(-2.0 * 3.14159265358979 * fc / sr);
-    const double subDuck = pSubDuck.load(), topDuck = pTopDuck.load();
+    const double subDuck = pSubDuck.load();
     const double holdMs = pHoldMs.load(), relMs = juce::jmax(5.0f, pRelMs.load());
-    const double pwr = 0.6 + pCurve.load() * 2.6;
+    const double pwr = 0.6 + pCurve.load() * 2.4;
     const double warmth = pWarmth.load();
     const bool monoOn = pMono.load() > 0.5f;
-    const double subGain = std::pow(10.0, juce::jlimit(-6.0, 6.0, (double)pSubGainDb.load()) / 20.0) * (pM30x.load() > 0.5f ? 1.585 : 1.0);
+    const double subGain = std::pow(10.0, juce::jlimit(-6.0, 6.0, (double)pSubGainDb.load()) / 20.0);
 
     const double bps = bpm / 60.0;
     const double beatMs = 1000.0 / bps;
-    const double smAtt = 1.0 - std::exp(-1.0 / (0.0006 * sr));
-    const double smRel = 1.0 - std::exp(-1.0 / (0.0020 * sr));
+    const double smAtt = 1.0 - std::exp(-1.0 / (0.0010 * sr));
+    const double smRel = 1.0 - std::exp(-1.0 / (0.0025 * sr));
 
     float maxSc = 0.0f;
     for (int i = 0; i < n; ++i) {
         double rawL = inLP[i], rawR = inRP[i];
 
+        // 1. Optional sub-sample delay (bypassed cleanly at 0ms)
+        double inL = rawL, inR = rawR;
         dlyBufL[(size_t)dlyWrite] = rawL;
         dlyBufR[(size_t)dlyWrite] = rawR;
-        int r1 = (dlyWrite - dInt + DELAY_BUF) % DELAY_BUF;
-        int r2 = (dlyWrite - dInt - 1 + DELAY_BUF) % DELAY_BUF;
-        double inL = dlyBufL[(size_t)r1] * (1.0 - dFrac) + dlyBufL[(size_t)r2] * dFrac;
-        double inR = dlyBufR[(size_t)r1] * (1.0 - dFrac) + dlyBufR[(size_t)r2] * dFrac;
+        if (delaySamps > 0.01) {
+            int r1 = (dlyWrite - dInt + DELAY_BUF) % DELAY_BUF;
+            int r2 = (dlyWrite - dInt - 1 + DELAY_BUF) % DELAY_BUF;
+            inL = dlyBufL[(size_t)r1] * (1.0 - dFrac) + dlyBufL[(size_t)r2] * dFrac;
+            inR = dlyBufR[(size_t)r1] * (1.0 - dFrac) + dlyBufR[(size_t)r2] * dFrac;
+        }
         dlyWrite = (dlyWrite + 1) % DELAY_BUF;
 
-        double ap1L = -aAp * inL + ap1xL + aAp * ap1yL; ap1xL = inL; ap1yL = ap1L;
-        double ap2L = -aAp * ap1L + ap2xL + aAp * ap2yL; ap2xL = ap1L; ap2yL = ap2L;
-        double ap1R = -aAp * inR + ap1xR + aAp * ap1yR; ap1xR = inR; ap1yR = ap1R;
-        double ap2R = -aAp * ap1R + ap2xR + aAp * ap2yR; ap2xR = ap1R; ap2yR = ap2R;
-        double sigL = ap2L * pol, sigR = ap2R * pol;
+        // 2. Optional All-Pass Phase Rotator (bypassed cleanly at 0 deg)
+        double sigL = inL * pol, sigR = inR * pol;
+        if (phaseDeg >= 1.0f) {
+            double ap1L = -aAp * inL + ap1xL + aAp * ap1yL; ap1xL = inL; ap1yL = ap1L;
+            double ap2L = -aAp * ap1L + ap2xL + aAp * ap2yL; ap2xL = ap1L; ap2yL = ap2L;
+            double ap1R = -aAp * inR + ap1xR + aAp * ap1yR; ap1xR = inR; ap1yR = ap1R;
+            double ap2R = -aAp * ap1R + ap2xR + aAp * ap2yR; ap2xR = ap1R; ap2yR = ap2R;
+            sigL = ap2L * pol; sigR = ap2R * pol;
+        }
 
-        lp1L += g * (sigL - lp1L); lp2L += g * (lp1L - lp2L); lp3L += g * (lp2L - lp3L); lp4L += g * (lp3L - lp4L);
-        lp1R += g * (sigR - lp1R); lp2R += g * (lp1R - lp2R); lp3R += g * (lp2R - lp3R); lp4R += g * (lp3R - lp4R);
-        double lowL = lp4L, highL = sigL - lowL;
-        double lowR = lp4R, highR = sigR - lowR;
-
+        // 3. Beat-Locked Pocket Shaper (Kickstart-style smooth full-band + mono sub below X-Over)
         double bp = dawPlaying ? std::fmod(std::abs(ppqStart + i * bps / sr), 1.0) : std::fmod(beatPhase + bps / sr, 1.0);
         beatPhase = bp;
         double posMs = bp * beatMs;
 
-        double tgtSub = 1.0, tgtTop = 1.0;
+        double tgtDuck = 1.0;
         if (posMs < holdMs) {
-            tgtSub = 1.0 - subDuck;
-            tgtTop = 1.0 - topDuck;
+            tgtDuck = 1.0 - subDuck;
         } else {
             double rt = juce::jlimit(0.0, 1.0, (posMs - holdMs) / relMs);
-            tgtSub = (1.0 - subDuck) + subDuck * std::pow(rt, pwr);
-            double rTop = juce::jlimit(0.0, 1.0, (posMs - holdMs * 0.7) / juce::jmax(5.0, relMs * 0.65));
-            tgtTop = (1.0 - topDuck) + topDuck * std::pow(rTop, pwr);
+            tgtDuck = (1.0 - subDuck) + subDuck * std::pow(rt, pwr);
+        }
+        subEnv += ((tgtDuck < subEnv) ? smAtt : smRel) * (tgtDuck - subEnv);
+
+        // Clean full-band shaper (zero phase hole!) + optional Mono Sub below X-Over
+        double shapedL = sigL * subEnv;
+        double shapedR = sigR * subEnv;
+
+        if (monoOn || warmth > 0.001 || std::abs(subGain - 1.0) > 0.001) {
+            lp1L += g * (shapedL - lp1L); lp2L += g * (lp1L - lp2L);
+            lp1R += g * (shapedR - lp1R); lp2R += g * (lp1R - lp2R);
+            double lowL = lp2L, highL = shapedL - lowL;
+            double lowR = lp2R, highR = shapedR - lowR;
+
+            if (monoOn) {
+                double mid = 0.5 * (lowL + lowR);
+                lowL = lowR = mid;
+            }
+            if (warmth > 0.001) {
+                double drv = 1.0 + warmth * 3.0;
+                double sL = std::tanh(lowL * drv) / std::tanh(drv);
+                double sR = std::tanh(lowR * drv) / std::tanh(drv);
+                lowL = lowL * (1.0 - warmth) + sL * warmth;
+                lowR = lowR * (1.0 - warmth) + sR * warmth;
+            }
+            shapedL = lowL * subGain + highL;
+            shapedR = lowR * subGain + highR;
         }
 
-        subEnv += ((tgtSub < subEnv) ? smAtt : smRel) * (tgtSub - subEnv);
-        topEnv += ((tgtTop < topEnv) ? smAtt : smRel) * (tgtTop - topEnv);
-
-        lowL *= subEnv; lowR *= subEnv;
-        highL *= topEnv; highR *= topEnv;
-
-        if (monoOn) {
-            double mid = 0.5 * (lowL + lowR);
-            lowL = lowR = mid;
-        }
-        if (warmth > 0.001) {
-            double drv = 1.0 + warmth * 5.0;
-            double sL = std::tanh(lowL * drv) / std::tanh(drv);
-            double sR = std::tanh(lowR * drv) / std::tanh(drv);
-            lowL = lowL * (1.0 - warmth) + sL * warmth;
-            lowR = lowR * (1.0 - warmth) + sR * warmth;
-        }
-
-        float outL = (float)std::tanh(juce::jlimit(-1.5, 1.5, lowL * subGain + highL));
-        float outR = (float)std::tanh(juce::jlimit(-1.5, 1.5, lowR * subGain + highR));
+        float outL = (float)juce::jlimit(-1.5, 1.5, shapedL);
+        float outR = (float)juce::jlimit(-1.5, 1.5, shapedR);
         L[i] = outL; R[i] = outR;
 
-        // Beat-locked oscilloscope bin (0..127 across exactly 1 beat = Kick + Bass aligned!)
         int bin = juce::jlimit(0, SCOPE_SIZE - 1, (int)(bp * (double)SCOPE_SIZE));
         float kickMono = (scLP && scRP) ? 0.5f * (scLP[i] + scRP[i]) : 0.0f;
         if (std::abs(kickMono) > maxSc) maxSc = std::abs(kickMono);

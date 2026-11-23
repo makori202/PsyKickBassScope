@@ -94,7 +94,7 @@
       let collisionScore = 0;
       for(let i=0; i<liveKick.length; i++) {
         const overlap = Math.min(Math.abs(liveKick[i]), Math.abs(liveBass[i]));
-        if(overlap > 0.08) {
+        if(overlap > 0.16) {
           collisionScore += overlap;
           const x = (i / (liveKick.length - 1)) * W;
           ctx.fillStyle = `rgba(239, 68, 68, ${Math.min(0.48, overlap * 1.4)})`;
@@ -106,7 +106,7 @@
       if(!hasSC) {
         lb.textContent = "ROUTE KICK -> SC";
         lb.className = "py-1 rounded text-center text-[10px] font-black bg-amber-950/90 border border-amber-500 text-amber-300";
-      } else if(collisionScore > 1.8) {
+      } else if(collisionScore > 2.8) {
         lb.textContent = "COLLISION! SHIFT";
         lb.className = "py-1 rounded text-center text-[10px] font-black bg-red-950/90 border border-red-500 text-red-300";
       } else {
@@ -190,36 +190,18 @@
         lb.textContent = "PLAY & ROUTE KICK FIRST";
         return;
       }
-      // 1. Find where Kick energy drops below 12% of its peak (in 128-bin beat = ~428ms at 140bpm)
       let kickPeak = 0;
       for (let i = 0; i < liveKick.length; i++) kickPeak = Math.max(kickPeak, Math.abs(liveKick[i]));
-      let kickTailBin = 24;
-      for (let i = Math.floor(liveKick.length * 0.55); i >= 4; i--) {
-        if (Math.abs(liveKick[i]) > kickPeak * 0.14) { kickTailBin = i; break; }
+      let kickTailBin = 14;
+      for (let i = Math.floor(liveKick.length * 0.50); i >= 4; i--) {
+        if (Math.abs(liveKick[i]) > Math.max(0.14, kickPeak * 0.18)) { kickTailBin = i; break; }
       }
-      // 1 beat at 140 BPM ~ 428ms -> ~3.34ms per bin
-      const estHold = Math.max(10, Math.min(42, Math.round(kickTailBin * 1.45)));
-
-      // 2. Check correlation at handoff zone (bins kickTailBin-4 .. kickTailBin+10) to pick 0° vs 180° & phase
-      let dot = 0;
-      const startBin = Math.max(0, kickTailBin - 4);
-      const endBin = Math.min(liveKick.length - 1, kickTailBin + 12);
-      for (let i = startBin; i <= endBin; i++) dot += liveKick[i] * liveBass[i];
-
-      if (dot < -0.02) {
-        st.inv = st.inv ? 0 : 1;
-        const invBtn = document.getElementById("btnInv");
-        invBtn.textContent = "180° INVERT: " + (st.inv ? "ON" : "OFF");
-        invBtn.classList.toggle("active", st.inv);
-      }
-
-      // 3. Fine-tune Time Shift (0.8 - 3.5 ms) & Phase Rotate based on remaining overlap
-      let overlapSum = 0;
-      for (let i = startBin; i <= endBin; i++) overlapSum += Math.min(Math.abs(liveKick[i]), Math.abs(liveBass[i]));
-      st.hold = estHold;
-      st.subDuck = Math.max(st.subDuck, overlapSum > 0.6 ? 92 : 85);
-      st.delayMs = overlapSum > 0.8 ? 2.4 : (overlapSum > 0.3 ? 1.2 : 0.0);
-      st.phase = (dot < 0) ? 90 : 0;
+      // 1 beat at 140 BPM ~ 428ms (~3.34ms per bin) -> set HOLD + DUCK to clear the kick cleanly
+      st.hold = Math.max(12, Math.min(48, Math.round(kickTailBin * 2.2)));
+      st.subDuck = 95;
+      st.rel = 55;
+      st.delayMs = 0.0;
+      st.phase = 0;
 
       syncInputs();
       render();
