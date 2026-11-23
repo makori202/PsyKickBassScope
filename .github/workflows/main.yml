@@ -1,0 +1,29 @@
+name: Build PsyKickBassScope VST3 (Windows)
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install WebView2 SDK
+        run: nuget install Microsoft.Web.WebView2 -OutputDirectory packages -ExcludeVersion
+      - name: Configure CMake
+        run: |
+          $inc = ("$env:GITHUB_WORKSPACE/packages/Microsoft.Web.WebView2/build/native/include") -replace '\\','/'
+          $lib = ("$env:GITHUB_WORKSPACE/packages/Microsoft.Web.WebView2/build/native/x64") -replace '\\','/'
+          if (Test-Path "PsyKickBassScope_VST3/CMakeLists.txt") {
+            cmake -S PsyKickBassScope_VST3 -B build "-DCMAKE_CXX_FLAGS=/I$inc" "-DCMAKE_SHARED_LINKER_FLAGS=/LIBPATH:$lib" "-DCMAKE_EXE_LINKER_FLAGS=/LIBPATH:$lib"
+          } else {
+            cmake -B build "-DCMAKE_CXX_FLAGS=/I$inc" "-DCMAKE_SHARED_LINKER_FLAGS=/LIBPATH:$lib" "-DCMAKE_EXE_LINKER_FLAGS=/LIBPATH:$lib"
+          }
+      - name: Build VST3
+        run: cmake --build build --config Release --target PsyKickBassScope_VST3 -j 4
+      - name: Upload VST3 Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PsyKickBassScope-Windows-VST3
+          path: build/PsyKickBassScope_artefacts/Release/VST3/PsyKickBassScope.vst3
